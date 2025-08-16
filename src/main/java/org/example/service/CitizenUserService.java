@@ -27,9 +27,9 @@ import java.util.logging.Logger;
 
 @Service
 @Transactional
-public class CitizenUserRegistrationService {
+public class CitizenUserService {
 
-    private static final Logger LOGGER = Logger.getLogger(CitizenUserRegistrationService.class.getName());
+    private static final Logger LOGGER = Logger.getLogger(CitizenUserService.class.getName());
 
     @Autowired
     private CitizenUserRepository citizenUserRepository;
