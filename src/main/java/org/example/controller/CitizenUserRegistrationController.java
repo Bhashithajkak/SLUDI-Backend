@@ -3,7 +3,7 @@ package org.example.controller;
 import jakarta.validation.Valid;
 import org.example.dto.*;
 import org.example.exception.ErrorCodes;
-import org.example.service.UserRegistrationService;
+import org.example.service.CitizenUserRegistrationService;
 import org.example.exception.SludiException;
 import org.example.exception.HttpStatusHandler;
 
@@ -17,23 +17,28 @@ import java.util.UUID;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/users")
+@RequestMapping("/api/citizen-users")
 @CrossOrigin(origins = "*")
-public class UserRegistrationController {
+public class CitizenUserRegistrationController {
 
     @Autowired
-    private UserRegistrationService userRegistrationService;
+    private CitizenUserRegistrationService citizenUserRegistrationService;
 
     /**
      * Register new user and create DID
-     * POST /api/users/register
+     * POST /api/citizen-users/register
      */
     @PostMapping("/register")
     public ResponseEntity<ApiResponseDto<UserRegistrationResponseDto>> registerUser(
-            @Valid @RequestBody UserRegistrationRequestDto request) {
+            @RequestPart("userData") @Valid UserRegistrationRequestDto request,
+            @RequestPart("profilePhoto") MultipartFile profilePhoto) {
 
         try {
-            UserRegistrationResponseDto response = userRegistrationService.registerUser(request);
+            validateImageFile(profilePhoto);
+
+            request.setProfilePhoto(profilePhoto);
+
+            UserRegistrationResponseDto response = citizenUserRegistrationService.registerUser(request);
 
             return ResponseEntity.status(HttpStatus.CREATED)
                     .body(ApiResponseDto.<UserRegistrationResponseDto>builder()
@@ -43,20 +48,11 @@ public class UserRegistrationController {
                             .timestamp(java.time.Instant.now())
                             .build());
 
-        } catch (SludiException e) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                    .body(ApiResponseDto.<UserRegistrationResponseDto>builder()
-                            .success(false)
-                            .message(e.getMessage())
-                            .errorCode(e.getErrorCode())
-                            .timestamp(java.time.Instant.now())
-                            .build());
-
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(ApiResponseDto.<UserRegistrationResponseDto>builder()
                             .success(false)
-                            .message("Internal server error occurred")
+                            .message(e.getMessage())
                             .errorCode("INTERNAL_ERROR")
                             .timestamp(java.time.Instant.now())
                             .build());
@@ -65,7 +61,7 @@ public class UserRegistrationController {
 
     /**
      * Update user profile information
-     * PUT /api/users/{userId}/profile
+     * PUT /api/citizen-users/{userId}/profile
      */
     @PutMapping("/{userId}/profile")
     public ResponseEntity<ApiResponseDto<UserProfileResponseDto>> updateUserProfile(
@@ -77,7 +73,7 @@ public class UserRegistrationController {
             // Extract user from JWT token for authorization
             validateAuthorization(authHeader, userId);
 
-            UserProfileResponseDto response = userRegistrationService.updateUserProfile(userId, request);
+            UserProfileResponseDto response = citizenUserRegistrationService.updateUserProfile(userId, request);
 
             return ResponseEntity.ok(ApiResponseDto.<UserProfileResponseDto>builder()
                     .success(true)
@@ -108,7 +104,7 @@ public class UserRegistrationController {
 
     /**
      * Retrieve user profile information
-     * GET /api/users/{userId}/profile
+     * GET /api/citizen-users/{userId}/profile
      */
     @GetMapping("/{userId}/profile")
     public ResponseEntity<ApiResponseDto<UserProfileResponseDto>> getUserProfile(
@@ -118,7 +114,7 @@ public class UserRegistrationController {
         try {
             String requesterDid = extractDidFromAuthHeader(authHeader);
 
-            UserProfileResponseDto response = userRegistrationService.getUserProfile(userId, requesterDid);
+            UserProfileResponseDto response = citizenUserRegistrationService.getUserProfile(userId, requesterDid);
 
             return ResponseEntity.ok(ApiResponseDto.<UserProfileResponseDto>builder()
                     .success(true)
@@ -149,7 +145,7 @@ public class UserRegistrationController {
 
     /**
      * Upload profile photo
-     * POST /api/users/{userId}/profile-photo
+     * POST /api/citizen-users/{userId}/profile-photo
      */
     @PostMapping("/{userId}/profile-photo")
     public ResponseEntity<ApiResponseDto<Map<String, String>>> uploadProfilePhoto(
@@ -168,7 +164,7 @@ public class UserRegistrationController {
                     .profilePhoto(photo)
                     .build();
 
-            UserProfileResponseDto response = userRegistrationService.updateUserProfile(userId, request);
+            UserProfileResponseDto response = citizenUserRegistrationService.updateUserProfile(userId, request);
 
             return ResponseEntity.ok(ApiResponseDto.<Map<String, String>>builder()
                     .success(true)
@@ -202,7 +198,7 @@ public class UserRegistrationController {
 
     /**
      * Upload additional documents
-     * POST /api/users/{userId}/documents
+     * POST /api/citizen-users/{userId}/documents
      */
     @PostMapping("/{userId}/documents")
     public ResponseEntity<ApiResponseDto<Map<String, Object>>> uploadDocuments(
@@ -223,7 +219,7 @@ public class UserRegistrationController {
                     .newDocuments(java.util.Arrays.asList(documents))
                     .build();
 
-            userRegistrationService.updateUserProfile(userId, request);
+            citizenUserRegistrationService.updateUserProfile(userId, request);
 
             return ResponseEntity.ok(ApiResponseDto.<Map<String, Object>>builder()
                     .success(true)
@@ -258,7 +254,7 @@ public class UserRegistrationController {
 
     /**
      * Deactivate user account
-     * POST /api/users/{userId}/deactivate
+     * POST /api/citizen-users/{userId}/deactivate
      */
     @PostMapping("/{userId}/deactivate")
     public ResponseEntity<ApiResponseDto<String>> deactivateUser(
@@ -271,7 +267,7 @@ public class UserRegistrationController {
             validateDeactivationAuthorization(authHeader, userId);
 
             String reason = requestBody.getOrDefault("reason", "User requested deactivation");
-            String result = userRegistrationService.deactivateUser(userId, reason);
+            String result = citizenUserRegistrationService.deactivateUser(userId, reason);
 
             return ResponseEntity.ok(ApiResponseDto.<String>builder()
                     .success(true)
@@ -302,7 +298,7 @@ public class UserRegistrationController {
 
     /**
      * Check if user exists by identifier
-     * GET /api/users/exists
+     * GET /api/citizen-users/exists
      */
     @GetMapping("/exists")
     public ResponseEntity<ApiResponseDto<Map<String, Boolean>>> checkUserExists(
@@ -313,13 +309,13 @@ public class UserRegistrationController {
             boolean exists;
             switch (type.toLowerCase()) {
                 case "email":
-                    exists = userRegistrationService.isCitizenUserExistsByEmail(identifier);
+                    exists = citizenUserRegistrationService.isCitizenUserExistsByEmail(identifier);
                     break;
                 case "nic":
-                    exists = userRegistrationService.isCitizenUserExistsByNic(identifier);
+                    exists = citizenUserRegistrationService.isCitizenUserExistsByNic(identifier);
                     break;
                 case "did":
-                    exists = userRegistrationService.isCitizenUserExistsByDidId(identifier);
+                    exists = citizenUserRegistrationService.isCitizenUserExistsByDidId(identifier);
                     break;
                 default:
                     throw new SludiException(ErrorCodes.INVALID_TYPE);
@@ -354,7 +350,7 @@ public class UserRegistrationController {
 
     /**
      * Get user statistics (for admin)
-     * GET /api/users/statistics
+     * GET /api/citizen-users/statistics
      */
     @GetMapping("/statistics")
     public ResponseEntity<ApiResponseDto<Map<String, Object>>> getUserStatistics(
@@ -363,7 +359,7 @@ public class UserRegistrationController {
         try {
             validateAdminAuthorization(authHeader);
 
-            Map<String, Object> stats = userRegistrationService.getUserStatistics();
+            Map<String, Object> stats = citizenUserRegistrationService.getUserStatistics();
 
             return ResponseEntity.ok(ApiResponseDto.<Map<String, Object>>builder()
                     .success(true)

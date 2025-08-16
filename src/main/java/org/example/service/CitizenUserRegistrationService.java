@@ -6,11 +6,11 @@ import org.example.entity.CitizenUser;
 import org.example.entity.AuthenticationLog;
 import org.example.entity.IPFSContent;
 import org.example.exception.ErrorCodes;
-import org.example.repository.CitizenUserRepository;
+import org.example.integration.HyperledgerService;
 import org.example.repository.AuthenticationLogRepository;
+import org.example.repository.CitizenUserRepository;
 import org.example.repository.IPFSContentRepository;
 import org.example.integration.IPFSService;
-import org.example.integration.HyperledgerService;
 import org.example.integration.AIService;
 import org.example.security.CryptographyService;
 import org.example.exception.SludiException;
@@ -24,10 +24,13 @@ import java.time.LocalDateTime;
 import java.util.*;
 import java.security.MessageDigest;
 import java.util.concurrent.CompletableFuture;
+import java.util.logging.Logger;
 
 @Service
 @Transactional
-public class UserRegistrationService {
+public class CitizenUserRegistrationService {
+
+    private static final Logger LOGGER = Logger.getLogger(CitizenUserRegistrationService.class.getName());
 
     @Autowired
     private CitizenUserRepository citizenUserRepository;
@@ -61,6 +64,7 @@ public class UserRegistrationService {
 
             // Check if user already exists
             if (citizenUserRepository.existsByNic(request.getPersonalInfo().getNic())) {
+                LOGGER.info("Checking for existing user with NIC: " + request.getPersonalInfo().getNic());
                 throw new SludiException(ErrorCodes.USER_EXISTS_WITH_NIC, request.getPersonalInfo().getNic());
             }
 
@@ -81,7 +85,7 @@ public class UserRegistrationService {
             // Store biometric data in IPFS (parallel execution)
             CompletableFuture<BiometricIPFSHashes> biometricFuture = storeBiometricDataAsync(user.getId(), request.getBiometricData());
 
-            // Store profile photo in IPFS (if provided)
+            // Store profile photo in IPFS
             CompletableFuture<String> profilePhotoFuture = null;
             if (request.getProfilePhoto() != null) {
                 profilePhotoFuture = storeProfilePhotoAsync(user.getId(), request.getProfilePhoto());
@@ -92,13 +96,12 @@ public class UserRegistrationService {
             String profilePhotoHash = profilePhotoFuture != null ? profilePhotoFuture.get() : null;
 
             // Create DID on Hyperledger Fabric
-            String didId = "did:sludi:" + user.getId().toString();
             HyperledgerTransactionResult didResult = hyperledgerService.registerCitizen(
                     createCitizenRegistration(user, request, biometricHashes)
             );
 
             // Update user with IPFS hashes and blockchain references
-            user.setDidId(didId);
+            user.setDidId(didResult.getDidId());
             user.setFingerprintIpfsHash(biometricHashes.getFingerprintHash());
             user.setFaceImageIpfsHash(biometricHashes.getFaceImageHash());
             user.setSignatureIpfsHash(biometricHashes.getSignatureHash());
@@ -116,7 +119,7 @@ public class UserRegistrationService {
             // Return success response
             return UserRegistrationResponseDto.builder()
                     .userId(user.getId())
-                    .didId(didId)
+                    .didId(user.getDidId())
                     .status("SUCCESS")
                     .message("User registered successfully")
                     .blockchainTxId(didResult.getTransactionId())
@@ -471,6 +474,7 @@ public class UserRegistrationService {
         return CitizenRegistrationDto.builder()
                 .userId(user.getId().toString())
                 .fullName(user.getFullName())
+                .dateOfBirth(user.getDateOfBirth().toString())
                 .nic(user.getNic())
                 .publicKeyBase58(request.getPublicKeyBase58())
                 .fingerprintHash(generateBiometricHash(hashes.getFingerprintHash()))
