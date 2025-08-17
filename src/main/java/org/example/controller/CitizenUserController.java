@@ -3,7 +3,7 @@ package org.example.controller;
 import jakarta.validation.Valid;
 import org.example.dto.*;
 import org.example.exception.ErrorCodes;
-import org.example.service.CitizenUserRegistrationService;
+import org.example.service.CitizenUserService;
 import org.example.exception.SludiException;
 import org.example.exception.HttpStatusHandler;
 
@@ -19,10 +19,10 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/citizen-users")
 @CrossOrigin(origins = "*")
-public class CitizenUserRegistrationController {
+public class CitizenUserController {
 
     @Autowired
-    private CitizenUserRegistrationService citizenUserRegistrationService;
+    private CitizenUserService citizenUserService;
 
     /**
      * Register new user and create DID
@@ -38,7 +38,7 @@ public class CitizenUserRegistrationController {
 
             request.setProfilePhoto(profilePhoto);
 
-            UserRegistrationResponseDto response = citizenUserRegistrationService.registerUser(request);
+            UserRegistrationResponseDto response = citizenUserService.registerUser(request);
 
             return ResponseEntity.status(HttpStatus.CREATED)
                     .body(ApiResponseDto.<UserRegistrationResponseDto>builder()
@@ -60,6 +60,74 @@ public class CitizenUserRegistrationController {
     }
 
     /**
+     * Get user by DID
+     * GET /api/citizen-users/did/{did}
+     */
+    @GetMapping("/did/{did}")
+    public ResponseEntity<ApiResponseDto<DIDDocumentDto>> getUserByDid(
+            @PathVariable String did) {
+        try {
+            DIDDocumentDto didDocument = citizenUserService.getDIDDocument(did);
+            return ResponseEntity.ok(ApiResponseDto.<DIDDocumentDto>builder()
+                    .success(true)
+                    .message("User retrieved successfully")
+                    .data(didDocument)
+                    .timestamp(java.time.Instant.now())
+                    .build());
+        } catch (SludiException e) {
+            return ResponseEntity.status(HttpStatusHandler.getStatus(e.getErrorCode()))
+                    .body(ApiResponseDto.<DIDDocumentDto>builder()
+                            .success(false)
+                            .message(e.getMessage())
+                            .errorCode(e.getErrorCode())
+                            .timestamp(java.time.Instant.now())
+                            .build());
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(ApiResponseDto.<DIDDocumentDto>builder()
+                            .success(false)
+                            .message("Failed to retrieve user by DID")
+                            .errorCode("INTERNAL_ERROR")
+                            .timestamp(java.time.Instant.now())
+                            .build());
+        }
+    }
+
+    /**
+     * Get user Verifiable Credential by Credential ID
+     * GET /api/citizen-users/credential/{credentialId}
+     */
+    @GetMapping("/credential/{credentialId}")
+    public ResponseEntity<ApiResponseDto<VerifiableCredentialDto>> getUserCredential(
+            @PathVariable String credentialId) {
+        try {
+            VerifiableCredentialDto credential = citizenUserService.getVerifiableCredential(credentialId);
+            return ResponseEntity.ok(ApiResponseDto.<VerifiableCredentialDto>builder()
+                    .success(true)
+                    .message("Credential retrieved successfully")
+                    .data(credential)
+                    .timestamp(java.time.Instant.now())
+                    .build());
+        } catch (SludiException e) {
+            return ResponseEntity.status(HttpStatusHandler.getStatus(e.getErrorCode()))
+                    .body(ApiResponseDto.<VerifiableCredentialDto>builder()
+                            .success(false)
+                            .message(e.getMessage())
+                            .errorCode(e.getErrorCode())
+                            .timestamp(java.time.Instant.now())
+                            .build());
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(ApiResponseDto.<VerifiableCredentialDto>builder()
+                            .success(false)
+                            .message("Failed to retrieve credential")
+                            .errorCode("INTERNAL_ERROR")
+                            .timestamp(java.time.Instant.now())
+                            .build());
+        }
+    }
+
+    /**
      * Update user profile information
      * PUT /api/citizen-users/{userId}/profile
      */
@@ -73,7 +141,7 @@ public class CitizenUserRegistrationController {
             // Extract user from JWT token for authorization
             validateAuthorization(authHeader, userId);
 
-            UserProfileResponseDto response = citizenUserRegistrationService.updateUserProfile(userId, request);
+            UserProfileResponseDto response = citizenUserService.updateUserProfile(userId, request);
 
             return ResponseEntity.ok(ApiResponseDto.<UserProfileResponseDto>builder()
                     .success(true)
@@ -114,7 +182,7 @@ public class CitizenUserRegistrationController {
         try {
             String requesterDid = extractDidFromAuthHeader(authHeader);
 
-            UserProfileResponseDto response = citizenUserRegistrationService.getUserProfile(userId, requesterDid);
+            UserProfileResponseDto response = citizenUserService.getUserProfile(userId, requesterDid);
 
             return ResponseEntity.ok(ApiResponseDto.<UserProfileResponseDto>builder()
                     .success(true)
@@ -164,7 +232,7 @@ public class CitizenUserRegistrationController {
                     .profilePhoto(photo)
                     .build();
 
-            UserProfileResponseDto response = citizenUserRegistrationService.updateUserProfile(userId, request);
+            UserProfileResponseDto response = citizenUserService.updateUserProfile(userId, request);
 
             return ResponseEntity.ok(ApiResponseDto.<Map<String, String>>builder()
                     .success(true)
@@ -219,7 +287,7 @@ public class CitizenUserRegistrationController {
                     .newDocuments(java.util.Arrays.asList(documents))
                     .build();
 
-            citizenUserRegistrationService.updateUserProfile(userId, request);
+            citizenUserService.updateUserProfile(userId, request);
 
             return ResponseEntity.ok(ApiResponseDto.<Map<String, Object>>builder()
                     .success(true)
@@ -267,7 +335,7 @@ public class CitizenUserRegistrationController {
             validateDeactivationAuthorization(authHeader, userId);
 
             String reason = requestBody.getOrDefault("reason", "User requested deactivation");
-            String result = citizenUserRegistrationService.deactivateUser(userId, reason);
+            String result = citizenUserService.deactivateUser(userId, reason);
 
             return ResponseEntity.ok(ApiResponseDto.<String>builder()
                     .success(true)
@@ -309,13 +377,13 @@ public class CitizenUserRegistrationController {
             boolean exists;
             switch (type.toLowerCase()) {
                 case "email":
-                    exists = citizenUserRegistrationService.isCitizenUserExistsByEmail(identifier);
+                    exists = citizenUserService.isCitizenUserExistsByEmail(identifier);
                     break;
                 case "nic":
-                    exists = citizenUserRegistrationService.isCitizenUserExistsByNic(identifier);
+                    exists = citizenUserService.isCitizenUserExistsByNic(identifier);
                     break;
                 case "did":
-                    exists = citizenUserRegistrationService.isCitizenUserExistsByDidId(identifier);
+                    exists = citizenUserService.isCitizenUserExistsByDidId(identifier);
                     break;
                 default:
                     throw new SludiException(ErrorCodes.INVALID_TYPE);
@@ -359,7 +427,7 @@ public class CitizenUserRegistrationController {
         try {
             validateAdminAuthorization(authHeader);
 
-            Map<String, Object> stats = citizenUserRegistrationService.getUserStatistics();
+            Map<String, Object> stats = citizenUserService.getUserStatistics();
 
             return ResponseEntity.ok(ApiResponseDto.<Map<String, Object>>builder()
                     .success(true)

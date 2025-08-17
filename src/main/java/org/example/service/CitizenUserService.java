@@ -1,14 +1,9 @@
 package org.example.service;
 
 import org.example.dto.*;
-import org.example.entity.Address;
-import org.example.entity.CitizenUser;
-import org.example.entity.AuthenticationLog;
-import org.example.entity.IPFSContent;
+import org.example.entity.*;
 import org.example.exception.ErrorCodes;
-import org.example.repository.AuthenticationLogRepository;
-import org.example.repository.CitizenUserRepository;
-import org.example.repository.IPFSContentRepository;
+import org.example.repository.*;
 import org.example.integration.IPFSIntegration;
 import org.example.integration.AIIntegration;
 import org.example.security.CryptographyService;
@@ -27,18 +22,24 @@ import java.util.logging.Logger;
 
 @Service
 @Transactional
-public class CitizenUserRegistrationService {
+public class CitizenUserService {
 
-    private static final Logger LOGGER = Logger.getLogger(CitizenUserRegistrationService.class.getName());
+    private static final Logger LOGGER = Logger.getLogger(CitizenUserService.class.getName());
 
     @Autowired
     private CitizenUserRepository citizenUserRepository;
+
+    @Autowired
+    private DIDDocumentRepository didDocumentRepository;
 
     @Autowired
     private AuthenticationLogRepository authLogRepository;
 
     @Autowired
     private IPFSContentRepository ipfsContentRepository;
+
+    @Autowired
+    private VerifiableCredentialRepository verifiableCredentialRepository;
 
     @Autowired
     private IPFSIntegration ipfsIntegration;
@@ -51,6 +52,9 @@ public class CitizenUserRegistrationService {
 
     @Autowired
     private CryptographyService cryptographyService;
+
+    @Autowired
+    private DataIntegrityService dataIntegrityService;
 
     /**
      * Register a new user with complete identity setup
@@ -110,6 +114,11 @@ public class CitizenUserRegistrationService {
             user.setStatus(CitizenUser.UserStatus.ACTIVE);
             user.setUpdatedAt(LocalDateTime.now());
 
+            // Create National ID credential issuance request
+            NationalIDCredentialIssuanceRequestDto credentialRequest = createNationalIDCredentialRequest(user, request.getPersonalInfo().getCitizenship(),
+                    request.getPersonalInfo().getNationality(), biometricHashes);
+            hyperledgerService.issueCredentialNationalID(credentialRequest);
+
             user = citizenUserRepository.save(user);
 
             // Log the registration activity
@@ -142,6 +151,152 @@ public class CitizenUserRegistrationService {
 
     public boolean isCitizenUserExistsByDidId(String didId) {
         return citizenUserRepository.existsByDidId(didId);
+    }
+
+    /**
+     * Get Citizen User DIDocument
+     * This method retrieves the DID document for a user based on their DID ID.
+     */
+    public DIDDocumentDto getDIDDocument(String didId) {
+        try {
+            // Check if the DID exist
+            if (didId == null || didId.isEmpty()) {
+                throw new SludiException(ErrorCodes.DID_NOT_FOUND, "DID ID cannot be null or empty");
+            }
+            // Retrieve the DID document from the repository
+            DIDDocument didDocument = didDocumentRepository.findById(didId)
+                    .orElseThrow(() -> new SludiException(ErrorCodes.DID_NOT_FOUND, "DID document not found for ID: " + didId));
+
+            // Check DID document integrity
+            if (!dataIntegrityService.verifyDidDocumentIntegrity(didDocument)) {
+                throw new SludiException(ErrorCodes.DID_INTEGRITY_VIOLATION, "DID document integrity check failed");
+            }
+
+            // Convert PublicKey to DTO
+            List<PublicKeyDto> publicKeys = new ArrayList<>();
+            for (PublicKey publicKey : didDocument.getPublicKey()) {
+                PublicKeyDto publicKeyDto = PublicKeyDto.builder()
+                        .id(publicKey.getId())
+                        .type(publicKey.getType())
+                        .controller(publicKey.getController())
+                        .publicKeyBase58(publicKey.getPublicKeyBase58())
+                        .build();
+                publicKeys.add(publicKeyDto);
+            }
+
+            // Convert Service to DTO
+            List<ServiceDto> services = new ArrayList<>();
+            for (Services service : didDocument.getServices()) {
+                ServiceDto serviceDto = ServiceDto.builder()
+                        .id(service.getId())
+                        .type(service.getType())
+                        .serviceEndpoint(service.getServiceEndpoint())
+                        .build();
+                services.add(serviceDto);
+            }
+
+            // Convert ProofData to DTO
+            ProofDataDto proofDto = ProofDataDto.builder()
+                    .proofType(didDocument.getProof().getProofType())
+                    .created(didDocument.getProof().getCreated())
+                    .creator(didDocument.getProof().getCreator())
+                    .signatureValue(didDocument.getProof().getSignatureValue())
+                    .build();
+
+            // Convert to DTO
+            return DIDDocumentDto.builder()
+                    .id(didDocument.getId())
+                    .didCreated(didDocument.getDidCreated())
+                    .didUpdated(didDocument.getDidUpdated())
+                    .didVersion(didDocument.getDidVersion())
+                    .publicKey(publicKeys)
+                    .authentication(didDocument.getAuthentication())
+                    .service(services)
+                    .status(didDocument.getStatus())
+                    .proof(proofDto)
+                    .build();
+
+        } catch (Exception e) {
+            throw new SludiException(ErrorCodes.FAILED_TO_RETRIEVE_DID_DOCUMENT, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Get Identity Verifiable Credential (IVC) for a user
+     * This method retrieves the IVC for a user based on their DID ID.
+     */
+    public VerifiableCredentialDto getVerifiableCredential(String credentialId) {
+        try {
+            // Check if the Credential exists
+            if (credentialId == null || credentialId.isEmpty()) {
+                throw new SludiException(ErrorCodes.CREDENTIAL_NOT_FOUND, "Credential ID cannot be null or empty");
+            }
+
+            // Retrieve the IVC from the repository
+            VerifiableCredential ivc = verifiableCredentialRepository.findById(credentialId)
+                    .orElseThrow(() -> new SludiException(ErrorCodes.CREDENTIAL_NOT_FOUND, "Credential not found for ID: " + credentialId));
+
+            // Check credential integrity
+            if(!dataIntegrityService.verifyCredentialIntegrity(ivc)) {
+                throw new SludiException(ErrorCodes.CREDENTIAL_INTEGRITY_VIOLATION, "Credential integrity check failed");
+            }
+
+            // Convert BiometricHashes to DTO
+            BiometricHashesDto biometricHashesDto = BiometricHashesDto.builder()
+                                                        .fingerprintHash(ivc.getCredentialSubject().getBiometricHashes().getFingerprintHash())
+                                                        .faceImageHash(ivc.getCredentialSubject().getBiometricHashes().getFaceImageHash())
+                                                        .build();
+            // Convert Address to DTO
+            AddressDto addressDto = AddressDto.builder()
+                    .street(ivc.getCredentialSubject().getAddress().getStreet())
+                    .city(ivc.getCredentialSubject().getAddress().getCity())
+                    .state(ivc.getCredentialSubject().getAddress().getState())
+                    .postalCode(ivc.getCredentialSubject().getAddress().getPostalCode())
+                    .country(ivc.getCredentialSubject().getAddress().getCountry())
+                    .district(ivc.getCredentialSubject().getAddress().getDistrict())
+                    .divisionalSecretariat(ivc.getCredentialSubject().getAddress().getDivisionalSecretariat())
+                    .gramaNiladhariDivision(ivc.getCredentialSubject().getAddress().getGramaNiladhariDivision())
+                    .build();
+
+            // Convert CredentialSubject to DTO
+            CredentialSubjectDto credentialSubjectDto = CredentialSubjectDto.builder()
+                    .id(ivc.getCredentialSubject().getId())
+                    .fullName(ivc.getCredentialSubject().getFullName())
+                    .nic(ivc.getCredentialSubject().getNic())
+                    .dateOfBirth(ivc.getCredentialSubject().getDateOfBirth())
+                    .citizenship(ivc.getCredentialSubject().getCitizenship())
+                    .gender(ivc.getCredentialSubject().getGender())
+                    .nationality(ivc.getCredentialSubject().getNationality())
+                    .biometricData(biometricHashesDto)
+                    .address(addressDto)
+                    .build();
+
+            // Convert ProofData to DTO
+            ProofDataDto proofDto = ProofDataDto.builder()
+                    .proofType(ivc.getProof().getProofType())
+                    .created(ivc.getProof().getCreated())
+                    .creator(ivc.getProof().getCreator())
+                    .signatureValue(ivc.getProof().getSignatureValue())
+                    .build();
+
+            // Convert to DTO
+            return VerifiableCredentialDto.builder()
+                    .id(ivc.getId())
+                    .context(ivc.getContext())
+                    .credentialTypes(ivc.getCredentialTypes())
+                    .issuer(ivc.getIssuer())
+                    .issuanceDate(ivc.getIssuanceDate())
+                    .expirationDate(ivc.getExpirationDate())
+                    .credentialSubject(credentialSubjectDto)
+                    .status(ivc.getStatus())
+                    .proof(proofDto)
+                    .createdAt(ivc.getCreatedAt())
+                    .updatedAt(ivc.getUpdatedAt())
+                    .build();
+
+        } catch (Exception e) {
+            throw new SludiException(ErrorCodes.FAILED_TO_RETRIEVE_IDENTITY_VC, e.getMessage(), e);
+        }
     }
 
     /**
@@ -218,7 +373,7 @@ public class CitizenUserRegistrationService {
     public AuthenticationResponseDto authenticateUser(AuthenticationRequestDto request) {
         try {
             // Find user by identifier (email, NIC, or DID)
-            CitizenUser user = findUserByIdentifier(request.getIdentifier());
+            CitizenUser user = findUserByIdentifier(request.getIdentifierType(), request.getIdentifier());
             if (user == null) {
                 logFailedAuthentication(request.getIdentifier(), "USER_NOT_FOUND", request.getDeviceInfo());
                 throw new SludiException(ErrorCodes.INVALID_CREDENTIALS);
@@ -377,12 +532,12 @@ public class CitizenUserRegistrationService {
         Address address = Address.builder()
                 .street(addressDto.getStreet())
                 .city(addressDto.getCity())
-                .state(addressDto.getState())
-                .postalCode(addressDto.getPostalCode())
-                .country("Sri Lanka")
                 .district(addressDto.getDistrict())
+                .postalCode(addressDto.getPostalCode())
                 .divisionalSecretariat(addressDto.getDivisionalSecretariat())
                 .gramaNiladhariDivision(addressDto.getGramaNiladhariDivision())
+                .state(addressDto.getState())
+                .country(addressDto.getCountry())
                 .build();
 
         return CitizenUser.builder()
@@ -393,7 +548,8 @@ public class CitizenUserRegistrationService {
                 .phone(request.getContactInfo().getPhone())
                 .dateOfBirth(request.getPersonalInfo().getDateOfBirth())
                 .gender(request.getPersonalInfo().getGender())
-                .nationality("Sri Lankan")
+                .nationality(request.getPersonalInfo().getNationality())
+                .citizenship(request.getPersonalInfo().getCitizenship())
                 .address(address)
                 .status(CitizenUser.UserStatus.PENDING)
                 .kycStatus(CitizenUser.KYCStatus.NOT_STARTED)
@@ -481,6 +637,23 @@ public class CitizenUserRegistrationService {
                 .build();
     }
 
+    private NationalIDCredentialIssuanceRequestDto createNationalIDCredentialRequest(CitizenUser user, String citizenship,
+                                                                                     String nationality, BiometricIPFSHashes hashes) {
+        return NationalIDCredentialIssuanceRequestDto.builder()
+                .subjectDID(user.getDidId())
+                .credentialType("identity")
+                .fullName(user.getFullName())
+                .nic(user.getNic())
+                .dateOfBirth(user.getDateOfBirth().toString())
+                .citizenship(citizenship)
+                .gender(user.getGender())
+                .nationality(nationality)
+                .fingerprintHash(hashes.getFingerprintHash())
+                .faceImageHash(hashes.getFaceImageHash())
+                .address(convertJsonToAddress(user.getAddress()))
+                .build();
+    }
+
     private String generateBiometricHash(String data) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -501,8 +674,15 @@ public class CitizenUserRegistrationService {
         return result.toString();
     }
 
-    private CitizenUser findUserByIdentifier(String identifier) {
-        return citizenUserRepository.findByEmailOrNicOrDidId(identifier, identifier, identifier);
+    private CitizenUser findUserByIdentifier(String type, String identifier) {
+        if(type=="EMAIL") {
+            return citizenUserRepository.findByEmailOrNicOrDidId(identifier, null, null);
+        } else if(type=="NIC") {
+            return citizenUserRepository.findByEmailOrNicOrDidId(null, identifier, null);
+        } else if(type=="DID") {
+            return citizenUserRepository.findByEmailOrNicOrDidId(null, null, identifier);
+        }
+        throw new SludiException(ErrorCodes.INVALID_IDENTIFIER_TYPE, "Invalid identifier type: " + type);
     }
 
     private BiometricData retrieveStoredBiometricData(CitizenUser user) {
