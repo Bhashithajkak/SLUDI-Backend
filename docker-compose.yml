@@ -1,0 +1,171 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: postgres-container
+    environment:
+      POSTGRES_USER: ${SPRING_DATASOURCE_USERNAME}
+      POSTGRES_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      POSTGRES_DB: ${SPRING_DATASOURCE_DATABASE}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - sludi-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${SPRING_DATASOURCE_USERNAME}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name:  redis-container
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    command: [
+      "redis-server",
+      "--requirepass","${REDIS_PASSWORD}",
+      "--appendonly","yes",
+      "--maxmemory","256mb",
+      "--maxmemory-policy","allkeys-lru"
+    ]
+    volumes:
+      - ./redis/data:/data
+    networks:
+      - sludi-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ipfs:
+    image: ipfs/kubo:latest
+    container_name: ipfs-container
+    ports:
+      - "4001:4001"
+      - "5001:5001"
+      - "8080:8080"
+    volumes:
+      - ./ipfs_data:/data/ipfs
+    networks:
+      - sludi-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "ipfs", "id" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sludi-backend
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ipfs:
+        condition: service_healthy
+
+    environment:
+      # === Application Settings ===
+      SERVER_PORT: 5000
+      SPRING_APPLICATION_NAME: sludi
+      SPRING_BASE_URL: https://api.sludi.dpdns.org
+
+      # ==== Database ====
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${SPRING_DATASOURCE_DATABASE}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+
+      # ==== Redis ====
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+      # ==== IPFS ====
+      IPFS_API_HOST: ipfs
+      IPFS_API_PORT: 5001
+      IPFS_GATEWAY_URL: http://ipfs:8080/ipfs/
+
+      # ==== Fabric Configuration (Using container paths) ====
+      FABRIC_BASE_PATH: /organizations/peerOrganizations
+
+      # Org1 Configuration
+      FABRIC_ORG1_MSP_ID: Org1MSP
+      FABRIC_ORG1_CHANNEL_NAME: sludi-channel
+      FABRIC_ORG1_CHAINCODE_NAME: sludi-chaincode
+      FABRIC_ORG1_PEER_ENDPOINT: peer0.org1.example.com:7051
+      FABRIC_ORG1_ORDERER_ENDPOINT: orderer.example.com:7050
+      FABRIC_ORG1_CA_ENDPOINT: 192.168.8.101:7054
+
+      # Org2 Configuration
+      FABRIC_ORG2_MSP_ID: Org2MSP
+      FABRIC_ORG2_CHANNEL_NAME: sludi-channel
+      FABRIC_ORG2_CHAINCODE_NAME: sludi-chaincode
+      FABRIC_ORG2_PEER_ENDPOINT: peer0.org2.example.com:9051
+      FABRIC_ORG2_ORDERER_ENDPOINT: orderer.example.com:7050
+      FABRIC_ORG2_CA_ENDPOINT: 192.168.8.101:8054
+
+      # ==== Fabric (Injected via mounted volume) ====
+      FABRIC_MSP_ID: Org1MSP
+      FABRIC_CHANNEL_NAME: sludi-channel
+      FABRIC_CHAINCODE_NAME: sludi-chaincode
+      FABRIC_CRYPTO_PATH: /organizations/peerOrganizations/org1.example.com
+      FABRIC_PEER_ENDPOINT: peer0.org1.example.com:7051
+      FABRIC_OVERRIDE_AUTH: peer0.org1.example.com
+      FABRIC_WALLET_PATH: /organizations/peerOrganizations/org1.example.com/msp/keystore
+
+      SLUDI_ORGANIZATION_PRIVATE_KEY_PATH: /organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp/keystore
+      SLUDI_ORGANIZATION_CERTIFICATE_PATH: /organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp/signcerts
+      SLUDI_ORGANIZATION_MSP_ID: Org1MSP
+      SLUDI_ISSUER_DID: did:sludi:government789
+
+      # === Security Configuration ===
+      JWT_SECRET_KEY: 2lYHIETKr8xHDeLmEW5nNuAdSxllkI50+HxD2F2ZBpXXV8Ze0VAMJtJox9YLYxFUTm7Urun6vmGKRr64Avs9jQ==
+
+    volumes:
+      - /home/kavindu/go/src/github.com/bhashitha/fabric-samples/test-network/organizations:/organizations
+
+    extra_hosts:
+      - "peer0.org1.example.com:192.168.8.101"
+      - "peer0.org2.example.com:192.168.8.101"
+      - "orderer.example.com:192.168.8.101"
+
+    networks:
+      - sludi-network
+      - fabric_test
+    restart: unless-stopped
+
+networks:
+  sludi-network:
+    driver: bridge
+  fabric_test:
+    external: true
+
